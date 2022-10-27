@@ -4,9 +4,9 @@ class for performance testing over TCP and UDP.
 
 import socket
 import time
-
+import os
 import utils
-
+from time import sleep
 # special bytes for sending messages
 ACK, NACK, MODE_ROUNDTRIP, MODE_THROUGHPUT, MODE_SIZES = range(25, 100, 15)
 ACK = bytes([ACK])
@@ -28,9 +28,11 @@ class mysocket(socket.socket):
     """A subclass of socket adding methods for TCP and UDP performance testing.
     Not intended to be used by itself, but through its subclasses serversocket
     and clientsocket."""
-    def __init__(self, port=8888, udp_timeout=1.0, *args, **kwargs):
+    def __init__(self, port=8888,sport =5004, udp_timeout=1.0, *args, **kwargs):
         super(mysocket, self).__init__(*args, **kwargs)
         self.port = port
+        self.sport = sport
+        self.RTT = 0
         if self.is_udp():
             self.settimeout(udp_timeout)
     
@@ -94,7 +96,6 @@ class mysocket(socket.socket):
     def is_tcp(self):
         """Return whether or not the socket is using TCP"""
         return utils.get_bit(self.type, socket.SOCK_STREAM-1)
-
     def is_udp(self):
         """Return whether or not the socket is using UDP"""
         return utils.get_bit(self.type, socket.SOCK_DGRAM-1)
@@ -103,7 +104,8 @@ class serversocket(mysocket):
     """A subclass of mysocket for server-side network performance testing"""
     def __init__(self, *args, **kwargs):
         super(serversocket, self).__init__(*args, **kwargs)
-        self.host = socket.gethostname()
+        #self.host = socket.gethostname()
+        self.host = "0.0.0.0"
 
     def accept(self):
         """accept() -> (socket object, address info)
@@ -123,6 +125,7 @@ class serversocket(mysocket):
         return sock, addr
 
     def activate(self, *args, **kwargs):
+        print("sanchal", self.host, self.port)
         self.bind((self.host, self.port))
         if self.is_tcp():
             return self._tcp_loop(*args, **kwargs)
@@ -146,7 +149,11 @@ class serversocket(mysocket):
                     # first byte selects the mode, the other is a mode-specific
                     # option to be interpreted by that mode's function
                     commands = client.recv(2)
-                    mode, option = commands
+                    if not commands:
+                        #client.send(NACK)
+                        mode = 'return'
+                    else:
+                        mode, option = commands
 
                     if mode == MODE_ROUNDTRIP:
                         self._roundtrip_tcp(client, option, *args, **kwargs)
@@ -158,7 +165,8 @@ class serversocket(mysocket):
                         client.send(NACK)
                         print("mode {} not implemented".format(mode))
                 finally:
-                    client.close()
+                    #client.close()
+                    print("dance")
         finally:
             self.close()
 
@@ -270,16 +278,23 @@ class clientsocket(mysocket):
     def __init__(self, host='', *args, **kwargs):
         super(clientsocket, self).__init__(*args, **kwargs)
         self.host = host
+        print("sanchal   ", self.host, self.sport)
+        self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.bind(("0.0.0.0", self.sport))
+        start = time.time()
         if self.is_tcp():
             self.connect((self.host, self.port))
         elif self.is_udp():
             self.destination = (self.host, self.port)
+        end = time.time()
+        diff = end - start
+        self.RTT = diff 
 
-    def roundtrip(self, msgsize, *args, **kwargs):
+    def roundtrip(self, msgsize, c, *args, **kwargs):
         """Perform roundtrip performance measurements, client-side.
         Determines whether to use TCP or UDP based on the type of the socket"""
         if self.is_tcp():
-            return self._roundtrip_tcp(msgsize, *args, **kwargs)
+            return self._roundtrip_tcp(msgsize,c, *args, **kwargs)
         elif self.is_udp():
             return self._roundtrip_udp(msgsize, *args, **kwargs)
         else:
@@ -303,7 +318,7 @@ class clientsocket(mysocket):
         else:
             raise ValueError("type {} not supported".format(self.type))
 
-    def _roundtrip_tcp(self, msgsize, *args, **kwargs):
+    def _roundtrip_tcp(self, msgsize,c, *args, **kwargs):
         """Perform roundtrip performance measurements using TCP,
         client-side."""
         self.sendall(bytes([MODE_ROUNDTRIP, msgsize]))
@@ -312,9 +327,699 @@ class clientsocket(mysocket):
 
         msgsize = 2**msgsize
         msg = utils.makebytes(msgsize)
-        
+        '''
+        #os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+        #os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+        os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+        #sleep(0.2)
+        #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+        os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+        os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+        #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
         start_time = time.time()
+        if c == 0:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+        if c == 1:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+        if c ==2:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
 
+        if c ==3:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==4:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==5:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+        if c ==0:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==1:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')  
+        if c ==2:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==3:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==4:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==5:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+        if c ==6:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+
+        if c ==7:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+
+        if c ==8:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+
+        if c ==9:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+
+        if c ==10:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+
+        if c ==11:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==12:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==13:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==14:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+        if c ==15:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==16:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==17:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==18:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+
+        if c ==19:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #sleep(0.2)
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s3-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s3-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s1-eth2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.3,tp_src=5003,tp_dst=8888,actions=output:s2-eth1')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.3,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2')
+        if c ==0:
+            #os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            #os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            #os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            #os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            #os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s1-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s3-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s3-eth2")
+        if c ==1:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s1-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s3-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s3-eth2")
+        if c ==2:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s1-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s3-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s3-eth2")
+        if c ==3:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s1-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s3-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s3-eth2")
+        if c ==4:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s1-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s3-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s3-eth2")
+        if c ==5:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s1-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s3-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s3-eth2")
+        if c ==6:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s1-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s3-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s3-eth2")
+        if c ==7:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s1-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s3-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s3-eth2")
+        if c ==8:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s1-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s3-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s3-eth2")
+        if c ==9:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s1-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s3-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s3-eth2")
+        if c ==10:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s3')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s3 priority=0,action=CONTROLLER:65535')
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,in_port=s1-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s1-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,in_port=s2-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth2,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f2,dl_dst=0a:55:76:65:cd:f0,nw_src=192.168.1.3,nw_dst=192.168.1.1,nw_tos=0,tp_src=8888,tp_dst=5003,actions=output:s3-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s3 priority=1,tcp,in_port=s3-eth1,vlan_tci=0x0000/0x1fff,dl_src=0a:55:76:65:cd:f0,dl_dst=0a:55:76:65:cd:f2,nw_src=192.168.1.1,nw_dst=192.168.1.3,nw_tos=0,tp_src=5003,tp_dst=8888,actions=output:s3-eth2")
+        if c ==0:
+           print("")
+        if c == 1:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 2:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 3:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 4:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 5:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 6:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 7:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 8:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 9:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 10:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 11:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 12:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 13:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 14:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s2-eth2")
+            #os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst=5003,actions=output:s1-eth1")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s1 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s1-eth3")
+            os.system("ovs-ofctl -O OpenFlow14 add-flow s2 priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src=5003,tp_dst=8888,actions=output:s2-eth1")
+        if c == 15:
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s1')
+            os.system('ovs-ofctl -O OpenFlow14 del-flows s2')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s1 priority=0,action=CONTROLLER:65535')
+            os.system('ovs-ofctl -O OpenFlow14 add-flow s2 priority=0,action=CONTROLLER:65535')
+        '''
+        
+        #os.system("ovs-ofctl -O OpenFlow14 --strict del-flows s2 'priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst={}'".format(c))
+        #os.system("ovs-ofctl -O OpenFlow14 --strict del-flows s1 'priority=1,tcp,nw_src=192.168.1.5,nw_dst=192.168.1.1,tp_src=8888,tp_dst={}'".format(c))
+        #os.system("ovs-ofctl -O OpenFlow14 --strict del-flows s2 'priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src={},tp_dst=8888'".format(c))
+        #os.system("ovs-ofctl -O OpenFlow14 --strict del-flows s1 'priority=1,tcp,nw_src=192.168.1.1,nw_dst=192.168.1.5,tp_src={},tp_dst=8888'".format(c))
+        sleep(0.1)
+        start_time = time.time()
         self.sendall(msg)
         recvmsg = self.recvby(msgsize, msgsize)[0]
 
@@ -322,7 +1027,6 @@ class clientsocket(mysocket):
         elapsed_time = end_time - start_time
 
         # check for corruption here? #
-        
         return elapsed_time
 
     def _roundtrip_udp(self, msgsize, *args, **kwargs):
